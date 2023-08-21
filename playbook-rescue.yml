@@ -1,0 +1,392 @@
+- hosts: localhost
+  gather_facts: true
+  tasks:
+    - name: Include variables - errorCodes
+      include_vars: ../../../group_vars/errorCodes.json
+
+    - name: Include variables - app configurations
+      include_vars: ../../../group_vars/appConfigurations.json
+
+    - name: Include variables - NFVD secrets
+      include_vars: ../../../group_vars/secret.yaml
+
+    - name: connect to db and insert the document
+      shell: >-
+        mongo --host {{dbHost}} "{{dbName}}" --port=27019 --eval 'db.{{collectionName}}.insertOne({"jobId": "{{ tower_job_id }}", "discoveredResources" : [{ "resource": "{{resourceType}}", "status": "running" }] })'
+      failed_when: documentInserted.rc not in [0, 252]
+      register: documentInserted
+      when: resourceType != "all"
+
+    - name: connect to db and insert the document for resourceType all
+      shell: >-
+        mongo --host {{dbHost}} "{{dbName}}" --port=27019 --eval 'db.{{collectionName}}.insertOne({"jobId": "{{ tower_job_id }}", "status": "running", "discoveredResources":  [{"resource": "images", "status": "pending", "details": ""}, {"resource": "flavors", "status": "pending", "details": ""}, {"resource": "networks", "status": "pending", "details": ""}, {"resource": "sub_networks", "status": "pending", "details": ""}]})'
+      failed_when: documentInserted.rc not in [0, 252]
+      register: documentInserted
+      when: resourceType == "all"
+
+    - name: set counter to zero for tracking number of resource failures
+      set_fact:
+        resourceListFailures: 0
+      when: resourceType == "all"
+
+    - name: set nfvd error
+      set_fact:
+        nfvdError: ". Please raise AYS ticket with NFVD Ops at ays ticket: https://atyourservice.verizon.com/ays?id=support&search=nfvd"
+
+    #
+    #   Section for VNF MP Marketplace Token
+    #
+    - name: block for getting marketplace token
+      block:
+        - name: get marketplace token
+          uri:
+            url: "{{ vnfmpUrl }}{{ vnfmpAPIs.api.getToken }}"
+            method: POST
+            body:
+              username: "{{ userDomain | default('USWIN')}}\\{{ userName }}"
+              password: "{{ userPassword }}"
+            headers:
+              Content-Type: application/json
+              Accept: application/json
+              Authorization: "{{ vnfmpAPIs.header.authorizationToken }}"
+            status_code: 200
+            body_format: json
+            validate_certs: no
+            timeout: "{{timeoutForVnfmpApis | default(180)}}"
+          register: tokenOutput
+          until: tokenOutput is not failed
+          retries: "{{retriesForVnfmpApis | default(5)}}"
+          delay: "{{delayForVnfmpApis | default(10)}}"
+          no_log: true
+
+        - name: save marketplace access token
+          set_fact:
+            vnfMarketPlaceToken : "{{ tokenOutput.json.access_token }}"
+            userEmail : "{{ tokenOutput.json.mail }}"
+      rescue:
+        - name: set fail message if unable to validate user in marketplace
+          set_fact:
+            errorScenario: "Unable to validate user VZID using VNF MarketPlace due to {{ansible_failed_result.msg}}. Please contact VNF-MarketPlace-All <VNF-MarketPlace-All@one.verizon.com>"
+          when: errorScenario is not defined
+
+        - name: update record with error scenario
+          shell:  >-
+            mongo --host {{dbHost}} "{{dbName}}" --port=27019 --eval 'db.{{collectionName}}.updateOne({ "jobId": "{{tower_job_id}}" },{ $set: { "discoveredResources" : [{ "resource": "{{resourceType}}", "status": "failed", "details": "{{errorScenario}}" }] }}) '
+          failed_when: "documentUpdated.rc not in [ 0, 252 ]"
+          register: documentUpdated
+          when: errorScenario is defined
+
+        - name: fail if unable to validate user in marketplace
+          fail:
+            msg: "{{ errorScenario }}"
+
+  #
+  #   Section for NFVD related variables
+  #
+    - name: get NFVD info for dev environment
+      set_fact:
+        nfvdUrl: "{{DEV.nfvd.url}}:8080"
+        domain: "{{DEV.nfvd.domain}}"
+        nfvdUser: "{{DEV.nfvd.user}}"
+        nfvdPassword: "{{secrets.nfvd.DEV.password}}"
+      when: envType | upper == "DEV"
+      no_log: True
+
+    - name: get NFVD info for ME environment
+      set_fact:
+        nfvdUrl: "{{ME.nfvd.url}}:8080"
+        domain: "{{ME.nfvd.domain}}"
+        nfvdUser: "{{ME.nfvd.user}}"
+        nfvdPassword: "{{secrets.nfvd.ME.password}}"
+      when: envType | upper == "ME"
+      no_log: True
+
+    - name: get NFVD info for prod environment
+      set_fact:
+        nfvdUrl: "{{PROD.nfvd.url}}:8080"
+        domain: "{{PROD.nfvd.domain}}"
+        nfvdUser: "{{PROD.nfvd.user}}"
+        nfvdPassword: "{{secrets.nfvd.PROD.password}}"
+      when: envType | upper == "PROD"
+      no_log: True
+
+    - name: get NFVD info for NFVD hook environment
+      set_fact:
+        nfvdUrl: "{{nfvdHook.url}}:8080"
+        domain: "{{nfvdHook.domain}}"
+        nfvdUser: "{{nfvdHook.user}}"
+        nfvdPassword: "{{nfvdHook.password}}"
+      when: nfvdHook is defined
+
+    - name: fail if NFVD environment info is not defined
+      fail:
+        msg: "[Status Code: {{BadRequest.code}} ] {{BadRequest.category}} : Input parameter {{item}} is missing or empty"
+      when: (item is undefined) or not(item | trim)
+      with_items:
+        - "{{ nfvdUrl }}"
+        - "{{ domain }}"
+        - "{{ nfvdUser }}"
+
+    #
+    #   Section for Extracting NFVD Token
+    #
+    - name: block for NFVD Token
+      block:
+        - name: get NFVD token
+          uri:
+            url: "{{ nfvdUrl }}/nfvd-ext/domains/{{ domain }}/token"
+            method: POST
+            body:
+              username: "{{ nfvdUser }}"
+              password: "{{ nfvdPassword }}"
+            headers:
+              Content-Type: application/json
+              Accept: application/json
+            status_code: 200
+            body_format: json
+            timeout: "{{timeoutForNfvdApis | default(180)}}"
+          register: tokenOutput
+          no_log: True
+          until: tokenOutput is not failed
+          retries: "{{retriesForNfvdApis | default(3)}}"
+          delay: "{{delayForNfvdApis | default(10)}}"
+          when: nfvdXAuthToken is not defined
+
+        - name: save NFVD token
+          set_fact:
+            nfvdXAuthToken: "{{tokenOutput.x_auth_token}}"
+            domainId: "{{ tokenOutput.json.user.groups[0]['@internal-id']  }}"
+          when: nfvdXAuthToken is not defined
+      rescue:
+        - name: set fail message if unable to get NFVD token
+          set_fact:
+            errorScenario: "Unable to get NFVD Token, due to {{ansible_failed_result.content}}. Please raise AYS ticket with NFVD Ops at ays ticket: https://atyourservice.verizon.com/ays?id=support&search=nfvd"
+
+        - name: update record with error scenario
+          shell:  >-
+            mongo --host {{dbHost}} "{{dbName}}" --port=27019 --eval 'db.{{collectionName}}.updateOne({ "jobId": "{{tower_job_id}}" },{ $set: { "discoveredResources" : [{ "resource": "{{resourceType}}", "status": "failed", "details": "{{errorScenario}}" }] }}) '
+          failed_when: documentUpdated.rc not in [0, 252]
+          register: documentUpdated
+          when: errorScenario is defined
+
+        - name: fail if unable to get NFVD token
+          fail:
+            msg: "{{ errorScenario }}"
+
+    #
+    #   Section for hook
+    #
+    - name: set default access permissions as false
+      set_fact:
+        authorizedUser: false
+        accessPermissionApiStatusCode: "-1"
+
+    - name: authorize user if username is specified
+      set_fact:
+        authorizedUser: true
+      when:
+        - allowed_users is defined
+        - allowed_users | regex_search(userName, ignorecase=True)
+
+
+    #
+    #   Section for user authorization for NFVD hierarchy using NFVD Ops API
+    #
+    - name: block for invoke user access permission API
+      block:
+        - name: set ops utility url
+          set_fact:
+            userAccessCheckApi: "{{nfvdOps.baseUrl}}:{{nfvdOps.port}}{{nfvdMetaData.nfvdOpsAPIMetaData.api_path.userPermissions}}"
+
+        - name: invoke user access permission API
+          uri:
+            url: "{{ userAccessCheckApi }}"
+            method: GET
+            body:
+              environment: "{{ nfvdOps.environment }}"
+              externalid: "{{ userName }}"
+              org: "{{ organization }}"
+              tenant: "{{ virtualDataCenter }}"
+              vnfgroup: "{{ vnfGroup }}"
+            headers:
+              Content-Type: application/json
+              Accept: application/json
+              Authorization: "{{secrets.nfvdOps.apiAuth}}"
+            status_code: 200
+            validate_certs: no
+            body_format: json
+            timeout: "{{timeoutForNfvdApis | default(180)}}"
+          register: userAccessPermissionOutput
+          until: userAccessPermissionOutput is not failed
+          retries: "{{retriesForNfvdApis | default(3)}}"
+          delay: "{{delayForNfvdApis | default(10)}}"
+          when: 
+            - authorizedUser != true 
+            - nfvdXAuthToken is defined
+
+        - name: save API response status and body
+          set_fact:
+            accessPermissionApiStatusCode: "{{userAccessPermissionOutput.status}}"
+            accessPermissionApiMessage: "{{userAccessPermissionOutput.json}}"
+          when:
+            - vnfGroup is defined
+            - userAccessPermissionOutput is defined
+            - userAccessPermissionOutput.status is defined
+
+        - name: set API output message if API failed
+          set_fact:
+            accessPermissionApiMessage: "{{userAccessPermissionOutput.msg}}"
+          when:
+            - vnfGroup is defined
+            - (accessPermissionApiStatusCode == "-1") or (accessPermissionApiStatusCode == "500")
+            - userAccessPermissionOutput.msg is defined
+
+        - name: authorize user if API passed
+          set_fact:
+            authorizedUser: true
+          when: accessPermissionApiStatusCode == "200"
+
+        - name: set fail message if user is not authorized
+          set_fact:
+            errorScenario: "User {{userName}} is not having right level access to Org {{organization}}, Vdc {{virtualDataCenter}}, Vnfg {{vnfGroup}}. Please raise AYS ticket with NFVD Ops at ays ticket: https://atyourservice.verizon.com/ays?id=support&search=nfvd"
+          when: not authorizedUser
+
+        - name: update record with error scenario
+          shell:  >-
+            mongo --host {{dbHost}} "{{dbName}}" --port=27019 --eval 'db.{{collectionName}}.updateOne({ "jobId": "{{tower_job_id}}" },{ $set: {  "discoveredResources" : [{ "resource": "{{resourceType}}", "status": "failed", "details": "{{errorScenario}}" }] }}) '
+          failed_when: "documentUpdated.rc not in [ 0, 252 ]"
+          register: documentUpdated
+          when: errorScenario is defined
+
+        - name: fail if user is not authorized
+          fail:
+            msg: "{{ errorScenario }}"
+          when: not authorizedUser
+      when: nfvdXAuthToken is defined
+      rescue:
+        - name: set fail message if unable to authorize user
+          set_fact:
+            errorScenario: "Validating user access to NFVD Org Hierarcy failed due to {{ansible_failed_result}}. Please raise AYS ticket with NFVD Ops at ays ticket: https://atyourservice.verizon.com/ays?id=support&search=nfvd"
+          when: errorScenario is not defined
+
+        - name: update record with error scenario
+          shell:  >-
+            mongo --host {{dbHost}} "{{dbName}}" --port=27019 --eval 'db.{{collectionName}}.updateOne({ "jobId": "{{tower_job_id}}" },{ $set: { "discoveredResources" : [{ "resource": "{{resourceType}}", "status": "failed", "details": {{ansible_failed_result.content}}  }]  }}) '
+          failed_when: "documentUpdated.rc not in [ 0, 252 ]"
+          register: documentUpdated
+          when: errorScenario is defined
+
+        - name: fail if unable to authorize user
+          fail:
+            msg: "{{ errorScenario }}"
+
+    #
+    #   Section for extracting NFVD Ids for NFVD hierarchy using NFVD individual APIS as namespace is not defined
+    #
+    - name: block to get NFVD hierarchy ids
+      block:
+        - name: include tasks to get NFVD hierarchy ids
+          include_tasks: GetNfvdIdIndividualApis.yaml
+          vars:
+            organization: "{{ organization }}"
+            virtualDataCenter: "{{ virtualDataCenter }}"
+            vnfGroup: "{{ vnfGroup }}"
+            dataCenter: "{{ dataCenter }}"
+      when:  authorizedUser == true
+      rescue:
+        - name: update record with error scenario
+          shell:  >-
+            mongo --host {{dbHost}} "{{dbName}}" --port=27019 --eval 'db.{{collectionName}}.updateOne({ "jobId": "{{tower_job_id}}" },{ $set: {  "discoveredResources" : [{ "resource": "{{resourceType}}", "status": "failed", "details": "{{errorScenario}}. Please raise AYS ticket with NFVD Ops at ays ticket: https://atyourservice.verizon.com/ays?id=support&search=nfvd" }]  }}) '
+          failed_when: "documentUpdated.rc not in [ 0, 252 ]"
+          register: documentUpdated
+          when: errorScenario is defined
+
+        - name: update record with error scenario
+          shell:  >-
+            mongo --host {{dbHost}} "{{dbName}}" --port=27019 --eval 'db.{{collectionName}}.updateOne({ "jobId": "{{tower_job_id}}" },{ $set: {  "discoveredResources" : [{ "resource": "{{resourceType}}", "status": "failed", "details": "{{errorScenarioRescue}}. Please raise AYS ticket with NFVD Ops at ays ticket: https://atyourservice.verizon.com/ays?id=support&search=nfvd" }]  }}) '
+          failed_when: "documentUpdated.rc not in [ 0, 252 ]"
+          register: documentUpdated
+          when: errorScenarioRescue is defined
+
+        - name: set fail message if unable get NFVD hierarchy ids
+          set_fact:
+            errorScenario: "unable to get NFVD Org Hierarcy info details failed due to {{ansible_failed_result.content}}"
+          when: errorScenario is not defined
+
+        - name: fail if unable to get NFVD hierarchy ids
+          fail:
+            msg: "{{ errorScenario }}"
+
+    #
+    #   Section for Extracting project id
+    #
+    - name: block for extracting project id
+      block:
+        - name: get openstack project list from NFVD
+          uri:
+            url: "{{ nfvdUrl }}/nfvd-ext/domains/{{ domainId }}/organizations/{{ orgId }}/datacenters/{{ dcId }}/project/openstack"
+            method: GET
+            headers:
+              Content-Type: application/json
+              Accept: application/json
+              X-Auth-Token: "{{nfvdXAuthToken}}"
+            status_code: 200
+            body_format: json
+            timeout: "{{timeoutForNfvdApis | default(300)}}"
+          register: projectIdOutput
+          until: projectIdOutput is not failed
+          retries: "{{retriesForNfvdApis | default(3)}}"
+          delay: "{{delayForNfvdApis | default(10)}}"
+
+        # - name: set dummy osProjectId value
+        #   set_fact:
+        #     osProjectId: "12345"
+
+        - name: fail if openstack project id not found
+          fail:
+            msg: "Unable to get project id using NFVD api"
+          when: osProjectId is not defined
+      when:  authorizedUser == true and errorScenario is not defined and errorScenarioRescue is not defined
+      rescue:
+        - name: set fail message if unable to get openstack project id
+          set_fact:
+            errorScenario: "Unable to get project id using NFVD api"
+
+        - name: debug fail message
+          debug:
+            msg: "{{ errorScenario }}"
+
+        - name: update record with error scenario
+          shell:  >-
+            mongo --host {{dbHost}} "{{dbName}}" --port=27019 --eval 'db.{{collectionName}}.updateOne({ "jobId": "{{tower_job_id}}" },{ $set: {  "discoveredResources" : [{ "status": "failed", "details": "{{errorScenario}}. Please raise AYS ticket with NFVD Ops at ays ticket: https://atyourservice.verizon.com/ays?id=support&search=nfvd" }]  }}) '
+          failed_when: "documentUpdated.rc not in [ 0, 252 ]"
+          register: documentUpdated
+          when: errorScenario is defined
+
+        - name: fail if unable to get openstack project id
+          fail:
+            msg: "{{ errorScenario }}"
+
+    - name: block to get discovered images
+      block:
+        - name: get discovered images
+          include_tasks: GetAllImages.yaml
+          when: (resourceType == "images" or resourceType == "all") and authorizedUser == true and osProjectId is defined
+
+    - name: block to get discovered flavors
+      block:
+        - name: get discovered flavors
+          include_tasks: GetAllFlavors.yaml
+          when: (resourceType == "flavors" or resourceType == "all") and authorizedUser == true and osProjectId is defined
+
+    - name: block to get discovered networks
+      block:
+        - name: get discovered networks
+          include_tasks: GetAllNetworks.yaml
+          when: (resourceType == "networks" or resourceType == "all") and authorizedUser == true and osProjectId is defined
+
+    - name: block to get discovered subnets
+      block:
+        - name: get discovered subnets
+          include_tasks: GetAllSubNetworks.yaml
+          when: (resourceType == "sub_networks" or resourceType == "all") and authorizedUser == true and osProjectId is defined
