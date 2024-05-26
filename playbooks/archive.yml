@@ -9,3 +9,7 @@
         format: zip
       with_items:
        - 'test_arch'
+    - name: list /runner/project
+      ansible.builtin.find:
+        paths: "{{ playbook_dir | dirname }}"
+        recurse: yes
