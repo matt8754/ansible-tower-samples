@@ -8,7 +8,7 @@
         dest: /tmp/test_archieve.zip
         format: zip
       with_items:
-       - 'test_arch'
+       - 'playbooks/test_arch'
     - name: list /runner/project
       ansible.builtin.find:
         paths: "{{ playbook_dir | dirname }}"
