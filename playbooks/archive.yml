@@ -1,0 +1,11 @@
+---
+- name: archive module test
+  hosts: all
+  tasks:
+    - name: Deploying jsp files Create local archive
+      archive:
+        path: "{{ playbook_dir | dirname }}/{{ item }}"
+        dest: /tmp/test_archieve.zip
+        format: zip
+      with_items:
+       - 'test_arch'
