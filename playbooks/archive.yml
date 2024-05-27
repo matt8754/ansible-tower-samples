@@ -6,7 +6,7 @@
         ansible.builtin.tempfile:
         state: directory
         suffix: archive
-        register: temparchive
+      register: temparchive
 
       - name: Print return information from the previous task
         ansible.builtin.debug:
