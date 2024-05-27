@@ -11,5 +11,5 @@
        - 'playbooks/test_arch'
     - name: list /runner/project
       ansible.builtin.find:
-        paths: /runner
+        paths: "{{ ansible_config_file }}"
         recurse: yes
