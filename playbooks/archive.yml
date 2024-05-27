@@ -11,5 +11,5 @@
        - 'playbooks/test_arch'
     - name: list /runner/project
       ansible.builtin.find:
-        paths: "{{ playbook_dir | dirname }}"
+        paths: /runner
         recurse: yes
