@@ -2,14 +2,25 @@
 - name: archive module test
   hosts: all
   tasks:
-    - name: Deploying jsp files Create local archive
-      archive:
-        path: "{{ playbook_dir | dirname }}/{{ item }}"
-        dest: /tmp/test_archieve.zip
-        format: zip
-      with_items:
-       - 'playbooks/test_arch'
-    - name: list /runner/project
-      ansible.builtin.find:
-        paths: "{{ ansible_config_file }}"
-        recurse: yes
+      - name: Create temporary archive directory
+        ansible.builtin.tempfile:
+        state: directory
+        suffix: archive
+        register: temparchive
+
+      - name: Print return information from the previous task
+        ansible.builtin.debug:
+            msg: "Temp archive: {{ temparchive }}"
+
+      - name: Clone your repository
+        git:
+            repo: https://github.com/matt8754/ansible-tower-samples.git
+            dest: "{{ temparchive }}"
+
+      - name: Deploying jsp files Create local archive
+        archive:
+            path: "{{ item }}"
+            dest: /tmp/test_archieve.zip
+            format: zip
+        with_items:
+            - "{{ temparchive }}/playbooks/test_arch"
