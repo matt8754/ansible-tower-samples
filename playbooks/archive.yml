@@ -28,3 +28,9 @@
             format: zip
         with_items:
             - "{{ temparchive.path }}/playbooks/test_arch"
+
+      - name: clean up the temp archive directory
+        ansible.builtin.file:
+            path: "{{ temparchive }}"
+            state: absent
+        when: temparchive is defined
