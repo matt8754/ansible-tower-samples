@@ -2,6 +2,10 @@
 - name: archive module test
   hosts: all
   tasks:
+      - name: Install git
+        ansible.builtin.package:
+            name: git
+            state: present
       - name: Create temporary archive directory
         ansible.builtin.tempfile:
             state: directory
