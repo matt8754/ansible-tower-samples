@@ -14,12 +14,12 @@
 
       - name: Print return information from the previous task
         ansible.builtin.debug:
-            msg: "Temp archive: {{ temparchive }}"
+            msg: "Temp archive: {{ temparchive.path }}"
 
       - name: Clone your repository
         git:
             repo: https://github.com/matt8754/ansible-tower-samples.git
-            dest: "{{ temparchive }}"
+            dest: "{{ temparchive.path }}"
 
       - name: Deploying jsp files Create local archive
         archive:
@@ -27,4 +27,4 @@
             dest: /tmp/test_archieve.zip
             format: zip
         with_items:
-            - "{{ temparchive }}/playbooks/test_arch"
+            - "{{ temparchive.path }}/ansible-tower-samples/playbooks/test_arch"
