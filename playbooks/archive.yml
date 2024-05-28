@@ -4,9 +4,9 @@
   tasks:
       - name: Create temporary archive directory
         ansible.builtin.tempfile:
-        state: directory
-        suffix: archive
-      register: temparchive
+            state: directory
+            suffix: archive
+        register: temparchive
 
       - name: Print return information from the previous task
         ansible.builtin.debug:
