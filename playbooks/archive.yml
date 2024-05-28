@@ -31,6 +31,6 @@
 
       - name: clean up the temp archive directory
         ansible.builtin.file:
-            path: "{{ temparchive }}"
+            path: "{{ temparchive.path }}"
             state: absent
         when: temparchive is defined
