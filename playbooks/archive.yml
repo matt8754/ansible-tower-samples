@@ -27,4 +27,4 @@
             dest: /tmp/test_archieve.zip
             format: zip
         with_items:
-            - "{{ temparchive.path }}/ansible-tower-samples/playbooks/test_arch"
+            - "{{ temparchive.path }}/playbooks/test_arch"
